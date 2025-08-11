@@ -65,8 +65,6 @@ WebSocket 实时控制
 
 ├── docs
 
-│   └── wiring.png       # 接线图
-
 ├── LICENSE              # 许可证
 
 └── README.md            # 项目说明文档
