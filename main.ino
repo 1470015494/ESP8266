@@ -8,8 +8,9 @@ const char* password="12345678";  // Wi-Fi 密码
 
 ESP8266WebServer server(80);     // 建立 HTTP 服务器
 WebSocketsServer ws(81);         // 建立 WebSocket 服务器
-Servo esc, rudder;               // 定义电调与舵机
+Servo rudder;                   // 定义舵机
 bool armed=false;                // 电机安全锁状态
+int motorPin = D1;              // 电机控制引脚
 
 // 内嵌网页（摇杆 + Arm 按钮）
 String page=R"rawliteral(
@@ -40,7 +41,7 @@ function joy(id,cb){
       let mx=Math.max(-50,Math.min(50,dx)),my=Math.max(-50,Math.min(50,dy));
       k.style.left=30+mx+"px";k.style.top=30+my+"px";
       cb(mx,my); // 回调发送数据
-    }};
+    }};  
   j.onpointerup=e=>{ // 松开回中
     s=0;t=0;k.style.left="30px";k.style.top="30px";cb(0,0);
   };
@@ -49,15 +50,15 @@ function joy(id,cb){
 // 左摇杆控制舵机（x偏移 → 角度）
 joy("#joyL",(x,y)=>{let val=90+x;ws.send("R"+val);});
 
-// 右摇杆控制油门（y偏移 → PWM），需解锁
+// 右摇杆控制油门（y偏移 → 开关控制）
 joy("#joyR",(x,y)=>{
   if(!armed)return; // 未解锁禁止
-  let val=1500-y*5; // 中立1500，上推加速
-  ws.send("M"+val);
+  let val = y > 0 ? 1 : 0; // 控制电机开关
+  ws.send("M"+val);  // 发送开关信号
 });
 
 // Arm 按钮：切换解锁状态
-document.getElementById("arm").onclick=()=>{
+document.getElementById("arm").onclick=()=>{  
   armed=!armed;ws.send("A"+(armed?1:0));
   document.getElementById("arm").style.background=armed?"#f00":"#0f0";
 };
@@ -65,29 +66,52 @@ document.getElementById("arm").onclick=()=>{
 )rawliteral";
 
 void setup(){
+  // 初始化串口输出
+  Serial.begin(115200); 
+  
   // 建立 Wi-Fi AP
   WiFi.softAP(ssid,password);
+  Serial.println("Wi-Fi Access Point Started");
 
-  // 绑定 PWM 引脚（D1 电调，D2 舵机）
-  esc.attach(D1,1000,2000); 
+  // 绑定 PWM 引脚（D2 舵机）
   rudder.attach(D2,500,2500);
 
-  // 上电初始化（电机中立，舵机居中）
-  esc.writeMicroseconds(1500);
+  // 上电初始化（舵机居中）
   rudder.write(90);
+  Serial.println("Initial PWM signals sent");
+
+  // 初始化电机控制引脚为输出
+  pinMode(motorPin, OUTPUT);
+  digitalWrite(motorPin, LOW); // 初始关闭电机
 
   // HTTP 服务器返回网页
   server.on("/",[]{server.send(200,"text/html",page);});
   server.begin();
+  Serial.println("HTTP server started");
 
   // WebSocket 事件处理
   ws.begin(); 
   ws.onEvent([](uint8_t n,WStype_t t,uint8_t *p,size_t l){
     if(t==WStype_TEXT){
       String m=(char*)p;
+      Serial.print("Received WebSocket message: ");
+      Serial.println(m);
       if(m[0]=='A') armed=m[1]=='1'; // Arm 切换
-      if(m[0]=='M' && armed) esc.writeMicroseconds(m.substring(1).toInt()); // 油门
-      if(m[0]=='R') rudder.write(m.substring(1).toInt()); // 舵机
+      if(m[0]=='M' && armed) {
+        int motorState = m.substring(1).toInt();
+        if (motorState == 1) {
+          digitalWrite(motorPin, HIGH);  // 开启电机
+          Serial.println("Motor ON");
+        } else {
+          digitalWrite(motorPin, LOW);  // 关闭电机
+          Serial.println("Motor OFF");
+        }
+      }
+      if(m[0]=='R') {
+        rudder.write(m.substring(1).toInt()); // 舵机
+        Serial.print("Rudder Angle: ");
+        Serial.println(m.substring(1).toInt());
+      }
     }
   });
 }
